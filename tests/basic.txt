@@ -1,4 +1,5 @@
-# rhun PROJECT --headless --extensions DIR --script tests/basic.txt (tests/run.sh sets it up)
+# rhun PROJECT --headless --extensions DIR --script tests/basic.txt (tests/run.sh sets it up).
+# A terminal prompt ignores Enter in its first half second, so the script waits before pressing it.
 wait 100
 open proj/a.txt
 wait-ext tasks running
@@ -17,6 +18,7 @@ type lint
 key Return
 wait 300
 print-palette
+wait 600
 key Return
 wait-term eslint
 print-palette
