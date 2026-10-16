@@ -1,5 +1,5 @@
 ext=tasks state=running
-rhun-editor/tasks state=running pid=PID cmds=tasks.run,tasks.rescan,tasks.make_all,tasks.make_build,tasks.make_test,tasks.npm_lint
+rhun-editor/tasks state=running pid=PID cmds=tasks.run,tasks.rescan,tasks.make_all,tasks.make_build,tasks.make_test,tasks.npm_lint confined=1
 prompt=Run in the terminal: Enter, or Esc
 field=make build
 choose=Run a task
