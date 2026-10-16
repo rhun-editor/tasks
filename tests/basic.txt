@@ -1,0 +1,25 @@
+# rhun PROJECT --headless --extensions DIR --script tests/basic.txt (tests/run.sh sets it up)
+wait 100
+open proj/a.txt
+wait-ext tasks running
+wait 300
+wait 300
+print-extensions
+cmd tasks.make_build
+wait 300
+print-palette
+key Escape
+wait 300
+cmd tasks.run
+wait 300
+print-palette
+type lint
+key Return
+wait 300
+print-palette
+key Return
+wait-term eslint
+print-palette
+cmd tasks.rescan
+wait 300
+print-toast

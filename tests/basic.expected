@@ -1,0 +1,14 @@
+ext=tasks state=running
+rhun-editor/tasks state=running pid=PID cmds=tasks.run,tasks.rescan,tasks.make_all,tasks.make_build,tasks.make_test,tasks.npm_lint
+prompt=Run in the terminal: Enter, or Esc
+field=make build
+choose=Run a task
+field=
+> make all
+  make build
+  make test
+  npm run lint
+prompt=Run in the terminal: Enter, or Esc
+field=npm run lint
+none
+toast=4 tasks found
