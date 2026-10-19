@@ -1,18 +1,14 @@
 // tasks: the project's tasks in rhun's palette. Makefile targets, package.json scripts,
 // justfile recipes, Cargo and Go commands are found when the project opens, each registered as
-// a command "make build", "npm run lint", …; running one proposes the command line for rhun's
-// terminal (Enter runs it). Run Task… (ctrl+alt+r) lists them all. The task files are checked
-// every two seconds: new tasks join the palette (a task that disappears stays until the
-// extension restarts, as the protocol has no unregister).
+// a command "make build", "npm run lint", ...; managed hosts track each reviewed run,
+// its output and completion. Older hosts use the terminal proposal. Run Task… (ctrl+alt+r) lists them all. The task files are checked
+// every two seconds: new tasks join the palette; with protocol 1.1's commands feature,
+// removed tasks leave the palette again.
 // Protocol: https://rhun.app/extensions/v1/
 package main
 
 import (
-	"bufio"
-	"encoding/json"
 	"os"
-	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -28,262 +24,183 @@ type task struct {
 }
 
 type ext struct {
-	project    string
-	mu         sync.Mutex
-	tasks      []task
-	registered map[string]bool
-	stamps     map[string]time.Time
-	e          *rhunext.Ext
+	project       string
+	projectEpoch  uint64
+	mu            sync.Mutex
+	scanMu        sync.Mutex
+	actionMu      sync.Mutex
+	client        taskClient
+	runs          []managedTask
+	configProject string
+	configTasks   []task
+	lastWarning   string
+	tasks         []task
+	registered    map[string]task
+	e             *rhunext.Ext
 }
-
-var taskFiles = []string{"Makefile", "makefile", "GNUmakefile", "package.json", "justfile", "Justfile", ".justfile", "Cargo.toml", "go.mod"}
 
 func (x *ext) Ready(e *rhunext.Ext, project string) {
 	x.e = e
-	x.project = project
-	x.registered = map[string]bool{}
-	x.stamps = map[string]time.Time{}
-	if project == "" {
-		return
+	// Published SDK v1.1 truncates spaced Ready paths; the native host also supplies this exact value.
+	if exact := os.Getenv("RHUN_PROJECT"); exact != "" {
+		project = exact
 	}
-	x.rescan()
+	x.project = project
+	x.projectEpoch = 1
+	x.registered = map[string]task{}
+	if project != "" {
+		x.rescan()
+	}
 	go x.watch()
 }
 
 func (x *ext) Event(e *rhunext.Ext, ev rhunext.Event) {
-	if ev.Name == "project" && len(ev.Args) > 0 && ev.Args[0] != "-" && ev.Args[0] != x.project {
-		// rhun starts "on = project" extensions again for a new project; this process goes
-		x.mu.Lock()
-		x.project = ev.Args[0]
-		x.mu.Unlock()
+	if ev.Name != "project" || len(ev.Args) != 1 {
+		return
 	}
-}
-
-func (x *ext) Run(e *rhunext.Ext, command string, doc rhunext.Doc) {
-	name := strings.TrimPrefix(command, "tasks.")
-	switch name {
-	case "rescan":
-		n := x.rescan()
-		e.Toast(plural(n, "task") + " found")
-		return
-	case "run":
-		x.mu.Lock()
-		tasks := append([]task(nil), x.tasks...)
-		x.mu.Unlock()
-		if len(tasks) == 0 {
-			e.Toast("Tasks: nothing found (Makefile, package.json, justfile, Cargo.toml, go.mod)")
-			return
-		}
-		items := make([]string, len(tasks))
-		for i, t := range tasks {
-			items[i] = t.title
-		}
-		n, err := e.Choose("Run a task", items)
-		if err != nil {
-			if !rhunext.Cancelled(err) {
-				e.Toast("Tasks: " + err.Error())
-			}
-			return
-		}
-		x.propose(tasks[n])
-		return
+	project := ev.Args[0]
+	if project == "-" {
+		project = ""
 	}
 	x.mu.Lock()
-	var found *task
-	for i := range x.tasks {
-		if x.tasks[i].name == name {
-			found = &x.tasks[i]
-		}
+	changed := project != x.project
+	if changed {
+		x.project = project
+		x.projectEpoch++
+		x.tasks = nil
+		x.runs = nil
+		x.configProject = ""
+		x.configTasks = nil
+		x.lastWarning = ""
 	}
 	x.mu.Unlock()
-	if found != nil {
-		x.propose(*found)
-	}
-}
-
-func (x *ext) propose(t task) {
-	if err := x.e.Term(t.command); err != nil && !rhunext.Cancelled(err) {
-		x.e.Toast("Tasks: " + err.Error())
+	if changed {
+		go x.rescan()
 	}
 }
 
 // rescan reads the task files and registers the commands that are new; it returns the count.
 func (x *ext) rescan() int {
+	x.scanMu.Lock()
+	defer x.scanMu.Unlock()
 	x.mu.Lock()
 	project := x.project
+	epoch := x.projectEpoch
 	x.mu.Unlock()
-	tasks := scan(project)
-	x.mu.Lock()
-	x.tasks = tasks
-	for _, f := range taskFiles {
-		if st, err := os.Stat(filepath.Join(project, f)); err == nil {
-			x.stamps[f] = st.ModTime()
-		} else {
-			delete(x.stamps, f)
-		}
+	canUnregister := x.e.Has("commands")
+	discovered := taskScan{}
+	var configured []task
+	var configErr error
+	if project != "" {
+		discovered = discoverTasks(project)
+		configured, configErr = readConfiguredTasks(project)
 	}
+	x.mu.Lock()
+	if x.project != project || x.projectEpoch != epoch {
+		x.mu.Unlock()
+		return 0
+	}
+	if x.configProject != project {
+		x.configProject = project
+		x.configTasks = nil
+	}
+	if configErr == nil {
+		x.configTasks = configured
+	} else {
+		discovered.warn("Cannot load " + taskConfigPath + ": " + configErr.Error())
+	}
+	tasks := append(append([]task(nil), x.configTasks...), discovered.tasks...)
+	x.tasks = tasks
 	var fresh []task
-	for _, t := range tasks {
-		if !x.registered[t.name] {
-			x.registered[t.name] = true
+	desired := tasks
+	if len(desired) > 64 {
+		desired = desired[:64]
+		discovered.warn(taskRegistrationWarning(len(tasks)))
+	}
+	present := make(map[string]bool, len(desired))
+	for _, t := range desired {
+		present[t.name] = true
+		old, exists := x.registered[t.name]
+		if !exists || canUnregister && old.title != t.title {
 			fresh = append(fresh, t)
 		}
 	}
+	var removed []string
+	for name := range x.registered {
+		if !present[name] {
+			removed = append(removed, name)
+			continue
+		}
+		if canUnregister {
+			for _, t := range desired {
+				if t.name == name && x.registered[name].title != t.title {
+					removed = append(removed, name)
+					break
+				}
+			}
+		}
+	}
 	x.mu.Unlock()
+	sort.Strings(removed)
+	if canUnregister {
+		for _, name := range removed {
+			// Request keeps the extension compatible with older SDK releases; the verb is
+			// sent only after the host agrees to protocol 1.1's commands feature.
+			if _, err := x.e.Request("unregister", nil, name); err != nil {
+				x.e.Logf("unregister %s: %v", name, err)
+			} else {
+				x.mu.Lock()
+				delete(x.registered, name)
+				x.mu.Unlock()
+			}
+		}
+	}
 	for _, t := range fresh {
+		x.mu.Lock()
+		stale := x.projectEpoch != epoch
+		_, stillRegistered := x.registered[t.name]
+		full := len(x.registered) >= 64
+		x.mu.Unlock()
+		if stale {
+			break
+		}
+		if stillRegistered {
+			discovered.warn("A task command could not be refreshed; use Run Task")
+			continue
+		}
+		if full {
+			discovered.warn(taskRegistrationWarning(len(tasks)))
+			break
+		}
 		if err := x.e.Register(t.name, "", t.title); err != nil {
 			x.e.Logf("register %s: %v", t.name, err)
+		} else {
+			x.mu.Lock()
+			x.registered[t.name] = t
+			x.mu.Unlock()
 		}
+	}
+	x.mu.Lock()
+	if x.projectEpoch != epoch {
+		x.mu.Unlock()
+		return 0
+	}
+	warning := taskWarningText(discovered.warning)
+	notify := warning != "" && warning != x.lastWarning
+	x.lastWarning = warning
+	x.mu.Unlock()
+	if notify {
+		x.e.Toast("Tasks: " + warning)
 	}
 	return len(tasks)
 }
 
 func (x *ext) watch() {
+	// A bounded authoritative scan also catches atomic replacement and preserved mtimes.
 	for {
 		time.Sleep(2 * time.Second)
-		x.mu.Lock()
-		project := x.project
-		changed := false
-		for _, f := range taskFiles {
-			st, err := os.Stat(filepath.Join(project, f))
-			old, had := x.stamps[f]
-			if (err == nil) != had || (err == nil && !st.ModTime().Equal(old)) {
-				changed = true
-			}
-		}
-		x.mu.Unlock()
-		if changed {
-			x.rescan()
-		}
+		x.rescan()
 	}
-}
-
-// scan finds the tasks in a project folder, in a stable order: make, just, npm, cargo, go.
-func scan(project string) []task {
-	var out []task
-	seen := map[string]bool{}
-	add := func(kind, what, title, command string) {
-		name := kind + "_" + slug(what)
-		for seen[name] {
-			name += "_"
-		}
-		seen[name] = true
-		out = append(out, task{name: name, title: title, command: command})
-	}
-	for _, f := range []string{"Makefile", "makefile", "GNUmakefile"} {
-		if targets := makeTargets(filepath.Join(project, f)); targets != nil {
-			for _, t := range targets {
-				add("make", t, "make "+t, "make "+t)
-			}
-			break
-		}
-	}
-	for _, f := range []string{"justfile", "Justfile", ".justfile"} {
-		if recipes := justRecipes(filepath.Join(project, f)); recipes != nil {
-			for _, r := range recipes {
-				add("just", r, "just "+r, "just "+r)
-			}
-			break
-		}
-	}
-	if scripts := npmScripts(filepath.Join(project, "package.json")); scripts != nil {
-		runner := "npm run"
-		if exists(filepath.Join(project, "pnpm-lock.yaml")) {
-			runner = "pnpm"
-		} else if exists(filepath.Join(project, "yarn.lock")) {
-			runner = "yarn"
-		} else if exists(filepath.Join(project, "bun.lockb")) || exists(filepath.Join(project, "bun.lock")) {
-			runner = "bun run"
-		}
-		for _, s := range scripts {
-			add("npm", s, "npm run "+s, runner+" "+s)
-		}
-	}
-	if exists(filepath.Join(project, "Cargo.toml")) {
-		for _, c := range []string{"build", "test", "run", "check", "clippy"} {
-			add("cargo", c, "cargo "+c, "cargo "+c)
-		}
-	}
-	if exists(filepath.Join(project, "go.mod")) {
-		for _, c := range []string{"build ./...", "test ./...", "vet ./...", "run ."} {
-			add("go", strings.Fields(c)[0], "go "+c, "go "+c)
-		}
-	}
-	return out
-}
-
-var targetLine = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9_./-]*)\s*:([^=]|$)`)
-
-func makeTargets(path string) []string {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	out := []string{}
-	seen := map[string]bool{}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		m := targetLine.FindStringSubmatch(line)
-		if m == nil || strings.Contains(line, "%") || strings.HasPrefix(line, "\t") {
-			continue
-		}
-		if m[1] == "" || seen[m[1]] {
-			continue
-		}
-		seen[m[1]] = true
-		out = append(out, m[1])
-	}
-	return out
-}
-
-var recipeLine = regexp.MustCompile(`^@?([A-Za-z_][A-Za-z0-9_-]*)(\s+[^:]*)?:(\s|$)`)
-
-func justRecipes(path string) []string {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	out := []string{}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "#") ||
-			strings.Contains(line, ":=") || strings.HasPrefix(line, "set ") || strings.HasPrefix(line, "import") ||
-			strings.HasPrefix(line, "mod ") || strings.HasPrefix(line, "export ") || strings.HasPrefix(line, "alias ") {
-			continue
-		}
-		if m := recipeLine.FindStringSubmatch(line); m != nil && !strings.HasPrefix(m[1], "_") {
-			out = append(out, m[1])
-		}
-	}
-	return out
-}
-
-func npmScripts(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var pkg struct {
-		Scripts map[string]string `json:"scripts"`
-	}
-	if json.Unmarshal(data, &pkg) != nil || len(pkg.Scripts) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(pkg.Scripts))
-	for k := range pkg.Scripts {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // slug makes a command name part: lower case, [a-z0-9_], runs of anything else as one _, at
@@ -330,7 +247,7 @@ func itoa(n int) string {
 }
 
 func main() {
-	if err := rhunext.Run(&ext{}); err != nil {
+	if err := rhunext.RunWith([]string{"commands", managedFeatureTasks}, &ext{}); err != nil {
 		os.Exit(1)
 	}
 }

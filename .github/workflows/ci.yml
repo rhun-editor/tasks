@@ -19,6 +19,13 @@ jobs:
         with:
           go-version: "1.25"
       - run: go vet ./... && go test ./... && go build ./...
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Runtime command lifecycle
+        run: python tests/lifecycle.py
+      - name: Managed task lifecycle
+        run: python tests/managed-lifecycle.py
   extension:
     runs-on: ubuntu-latest
     steps:
