@@ -1,0 +1,11 @@
+# W2: cargo build fails with E0425; the rustc matcher reads it over two lines.
+open PROJ/src/main.rs
+wait-ext tasks running
+wait 600
+key ctrl+shift+b
+wait 300
+dialog yes
+wait-terminal 1 ended
+print-terminals
+print-problems
+print-marks

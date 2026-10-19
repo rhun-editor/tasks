@@ -1,0 +1,5 @@
+ext=tasks state=running
+*term=1 kind=task owner=rhun-editor/tasks task=cargo.build state=exited code=101 pid=PID runs=1 title=cargo build
+problem path=WORK/cargo/src/main.rs line=3 col=20c end=- severity=error code=E0425 source=cargo build message=cannot find value `x` in this scope
+3 20 3 21 error problems:cargo build cannot find value `x` in this scope
+errors=1 warnings=0

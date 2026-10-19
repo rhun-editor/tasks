@@ -1,27 +1,18 @@
-# rhun PROJECT --headless --extensions DIR --script tests/basic.txt (tests/run.sh sets it up).
-# A terminal prompt ignores Enter in its first half second, so the script waits before pressing it.
-wait 100
-open proj/a.txt
+# The published tasks, the approval of the first run, a run in its tab, Run Task's list, Rescan.
 wait-ext tasks running
-wait 300
-wait 300
+wait 600
 print-extensions
+print-tasks
 cmd tasks.make_build
 wait 300
-print-palette
-key Escape
-wait 300
+print-dialog
+dialog yes
+wait-terminal 1 ended
+print-terminals
 cmd tasks.run
 wait 300
 print-palette
-type lint
-key Return
-wait 300
-print-palette
-wait 600
-key Return
-wait-term eslint
-print-palette
+key Escape
 cmd tasks.rescan
 wait 300
 print-toast

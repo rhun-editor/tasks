@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Drive task discovery against both protocol 1 and negotiated command removal."""
+"""Drive task discovery against protocol 1, negotiated command removal and the tasks feature (the
+list published with tasks-set, again when it changes)."""
 import os
 from pathlib import Path
 import queue
@@ -22,7 +23,7 @@ class Lifecycle(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def session(self, commands):
+    def session(self, commands, tasks=False):
         with tempfile.TemporaryDirectory(prefix='rhun-tasks-project-') as folder:
             project = Path(folder)
             makefile = project / 'Makefile'
@@ -35,7 +36,7 @@ class Lifecycle(unittest.TestCase):
                 while line := proc.stdout.readline():
                     fields = line.decode().strip().split()
                     body = b''
-                    if len(fields) > 2 and fields[1] in ('toast', 'status'):
+                    if len(fields) > 2 and fields[1] in ('toast', 'status', 'tasks-set'):
                         body = proc.stdout.read(int(fields[-1]))
                     messages.put((fields, body))
 
@@ -53,10 +54,15 @@ class Lifecycle(unittest.TestCase):
                     self.fail('extension did not send the expected request')
 
             try:
-                self.assertEqual(take()[0], ['hello', '1', 'commands', 'tasks'])
+                self.assertEqual(take()[0], ['hello', '1', 'commands', 'terminals', 'tasks'])
                 if commands:
-                    send('0 features commands')
+                    send('0 features commands' + (' terminals tasks' if tasks else ''))
                 send('0 ready ' + str(project))
+                if tasks:
+                    fields, body = take()
+                    self.assertEqual(fields[1], 'tasks-set')
+                    self.assertTrue(body.startswith(b'2\nmake.old shell 8 8 0 14\nmake oldmake oldmatcher gcc 0\n'), body)
+                    send('ok ' + fields[0])
                 initial = []
                 for _ in range(2):
                     fields, _ = take()
@@ -70,6 +76,12 @@ class Lifecycle(unittest.TestCase):
                 seen = []
                 while True:
                     fields, body = take()
+                    if fields[1] == 'tasks-set':
+                        self.assertIn(b'make.new shell', body)
+                        self.assertNotIn(b'make.old', body)
+                        seen.append(('tasks-set',))
+                        send('ok ' + fields[0])
+                        continue
                     if fields[1] == 'toast':
                         self.assertEqual(body, b'2 tasks found')
                         send('ok ' + fields[0])
@@ -79,6 +91,8 @@ class Lifecycle(unittest.TestCase):
                 expected = [('register', 'make_new')]
                 if commands:
                     expected.insert(0, ('unregister', 'make_old'))
+                if tasks:
+                    expected.insert(0, ('tasks-set',))
                 self.assertEqual(seen, expected)
                 send('0 bye')
                 proc.wait(timeout=5)
@@ -97,6 +111,9 @@ class Lifecycle(unittest.TestCase):
 
     def test_old_hosts_receive_no_unregister_requests(self):
         self.session(commands=False)
+
+    def test_a_tasks_host_gets_the_list_and_its_changes(self):
+        self.session(commands=True, tasks=True)
 
 
 if __name__ == '__main__':

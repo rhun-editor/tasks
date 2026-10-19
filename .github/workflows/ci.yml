@@ -22,10 +22,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Runtime command lifecycle
+      - name: Runtime command and task list lifecycle
         run: python tests/lifecycle.py
-      - name: Managed task lifecycle
-        run: python tests/managed-lifecycle.py
   extension:
     runs-on: ubuntu-latest
     steps:
@@ -39,7 +37,7 @@ jobs:
         run: curl -fsSL https://github.com/vshvedov/rhun/releases/latest/download/install.sh | sh
       - name: Headless test
         run: |
-          # extensions came with rhun 0.18.0 (views, completion and signature help too)
+          # the tasks feature came with rhun 0.18.0; the workflows run real go, cargo and python3
           v=$("$HOME/.local/bin/rhun" --version | sed 's/^rhun //')
-          case "$v" in 0.[0-9].*|0.1[0-7].*) echo "rhun $v has no extensions: the headless test needs 0.18.0"; exit 0 ;; esac
+          case "$v" in 0.[0-9].*|0.1[0-7].*) echo "rhun $v has no tasks feature: the headless test needs 0.18.0"; exit 0 ;; esac
           sh tests/run.sh "$HOME/.local/bin/rhun"

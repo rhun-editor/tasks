@@ -5,3 +5,4 @@ package main
 import "syscall"
 
 const taskOpenFlags = syscall.O_NONBLOCK
+const isWindows = false

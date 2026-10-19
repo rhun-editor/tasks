@@ -1,14 +1,16 @@
 ext=tasks state=running
-rhun-editor/tasks state=running pid=PID cmds=tasks.run,tasks.rescan,tasks.stop,tasks.restart,tasks.output,tasks.make_all,tasks.make_build,tasks.make_test,tasks.npm_lint confined=1
-prompt=Run in the terminal: Enter, or Esc
-field=make build
-choose=Run a task
+rhun-editor/tasks state=running pid=PID cmds=tasks.run,tasks.rescan,tasks.stop,tasks.restart,tasks.show,tasks.make_all,tasks.make_build,tasks.make_test,tasks.npm_lint confined=1
+rhun-editor/tasks id=make.all group=build default=1 label=make all
+rhun-editor/tasks id=make.build group=build default=0 label=make build
+rhun-editor/tasks id=make.test group=test default=1 label=make test
+rhun-editor/tasks id=npm.lint group=- default=0 label=npm run lint
+dialog=Let Tasks run programs in basic?
+text=make build   in ~/basic
+button=Allow
+*term=1 kind=task owner=rhun-editor/tasks task=make.build state=exited code=0 pid=PID runs=1 title=make build
 field=
 > make all
   make build
   make test
   npm run lint
-prompt=Run in the terminal: Enter, or Esc
-field=npm run lint
-none
 toast=4 tasks found

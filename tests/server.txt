@@ -1,0 +1,16 @@
+# W3: Smoke depends on the dev server, a background task: it runs once the server prints its ready
+# line, and the server keeps running. Then the debugger's prelaunch hook runs Smoke by name.
+wait-ext tasks running
+wait 600
+cmd tasks.config_smoke
+wait 300
+print-dialog
+dialog yes
+wait-terminal 2 ended
+print-terminals
+print-task-status
+print-term
+task-prelaunch rhun-editor/tasks:smoke
+wait-terminal 2 ended 2
+wait 300
+print-prelaunch
