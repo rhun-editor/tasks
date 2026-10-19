@@ -7,7 +7,7 @@
 #   server  a dev server task and one depending on it: it runs once the server is ready, which keeps
 #           running; the debugger's prelaunch hook runs it by name (python3 on PATH)
 # usage: tests/run.sh [RHUN [NAME...]]   (a go.work with the SDK when it is unreleased: GOWORK=…;
-# TASKS_TEST_OUT=DIR keeps what rhun printed)
+# TASKS_TEST_OUT=DIR keeps what rhun printed; TASKS_BIN=PATH takes a built extension)
 set -e
 cd "$(dirname "$0")/.."
 RHUN=${1:-$(command -v rhun || echo "$HOME/.local/bin/rhun")}
@@ -22,7 +22,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 dir=$work/exts/rhun-editor/tasks
 mkdir -p "$dir/bin" "$work/config/rhun"
-CGO_ENABLED=0 go build -o "$dir/bin/tasks-$target" .
+if [ -n "$TASKS_BIN" ]; then cp "$TASKS_BIN" "$dir/bin/tasks-$target"; else CGO_ENABLED=0 go build -o "$dir/bin/tasks-$target" .; fi
 cp extension.ini "$dir/"
 printf '[files]\nrestore_session = false\nrestore_project = false\n[updates]\ncheck = false\n[git]\nenabled = false\n[ui]\nsidebar = false\nagents_panel = false\n[editor]\ncursor_blink = false\n' > "$work/config/rhun/config"
 # the toolchains keep their homes; everything of rhun's goes to $work
