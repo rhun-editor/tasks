@@ -1,0 +1,16 @@
+# W1: Run Build Task (ctrl+shift+B) runs go build ./..., the go matcher makes three problems: the
+# open file shows its marks, the Problems tab lists both files.
+open PROJ/main.go
+wait-ext tasks running
+wait 600
+key ctrl+shift+b
+wait 300
+print-dialog
+dialog yes
+wait-terminal 1 ended
+print-terminals
+print-problems
+print-marks
+cmd toggle_problems
+print-problems-tab
+print-term

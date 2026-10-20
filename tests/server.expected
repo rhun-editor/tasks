@@ -1,0 +1,22 @@
+ext=tasks state=running
+dialog=Let Tasks run programs in server?
+text=python3 -c 'import urllib.request as u; print('\…1:PORT/'\'').status)', and 1 task it depends on   in ~/server
+button=Allow
+term=1 kind=task owner=rhun-editor/tasks task=serve state=running code=- pid=PID runs=1 title=Dev server
+*term=2 kind=task owner=rhun-editor/tasks task=smoke state=exited code=0 pid=PID runs=1 title=Smoke
+task-status=Dev server
+status 200
+── Smoke exited with code 0 after T s ──
+
+
+
+
+
+
+
+
+
+
+cursor 2,0
+prelaunch=started
+prelaunch=done

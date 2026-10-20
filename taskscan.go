@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/rhun-editor/extension-protocol/go/rhunext"
 )
 
 const maxDiscoveredTasks = 872
@@ -22,8 +24,17 @@ const maxTaskSourceLine = 64 << 10
 var targetLine = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9_./-]*)\s*:([^=]|$)`)
 var recipeLine = regexp.MustCompile(`^@?([A-Za-z_][A-Za-z0-9_-]*)(\s+[^:]*)?:(\s|$)`)
 
+// a dev server's ready line: the URL it serves on
+var serverReady = []string{"{_}http://localhost{_}", "{_}http://127.0.0.1{_}"}
+
+// entry is a task and the name part of its palette command (make_build)
+type entry struct {
+	name string
+	task rhunext.Task
+}
+
 type taskScan struct {
-	tasks   []task
+	tasks   []entry
 	warning string
 }
 
@@ -33,23 +44,33 @@ func (s *taskScan) warn(message string) {
 	}
 }
 
+// program runs a command: argv form on Windows (npm.cmd, go, cargo, make), a shell line elsewhere
+func program(windows bool, args ...string) rhunext.Program {
+	if windows {
+		return rhunext.Program{Argv: args}
+	}
+	words := make([]string, len(args))
+	for i, a := range args {
+		words[i] = taskShellWord(a)
+	}
+	return rhunext.Program{Shell: strings.Join(words, " ")}
+}
+
 // scan preserves discovery's public test surface; rescan also consumes its bounded warning.
-func scan(project string) []task { return discoverTasks(project).tasks }
-func discoverTasks(project string) taskScan {
+func scan(project string) []entry { return discoverTasks(project, runtime.GOOS == "windows").tasks }
+
+func discoverTasks(project string, windows bool) taskScan {
 	var result taskScan
-	seen := map[string]bool{}
-	add := func(kind, what, title, command string) {
+	seenName, seenID := map[string]bool{}, map[string]bool{}
+	defaults := map[string]bool{}
+	add := func(kind, what string, t rhunext.Task) {
 		if len(result.tasks) == maxDiscoveredTasks {
 			result.warn("More than 872 discovered tasks; the first 872 remain available")
 			return
 		}
-		if err := (managedSpec{Label: title, Command: command, Workspace: "."}).Validate(); err != nil {
-			result.warn("Some discovered tasks have unsupported or oversized names")
-			return
-		}
 		base := kind + "_" + slug(what)
 		name := base
-		for n := 2; seen[name]; n++ {
+		for n := 2; seenName[name]; n++ {
 			suffix := "_" + strconv.Itoa(n)
 			prefix := base
 			if len(prefix) > 40-len(suffix) {
@@ -57,8 +78,22 @@ func discoverTasks(project string) taskScan {
 			}
 			name = prefix + suffix
 		}
-		seen[name] = true
-		result.tasks = append(result.tasks, task{name: name, title: title, command: command})
+		id := kind + "." + strings.ReplaceAll(slug(what), "_", "-")
+		for n := 2; seenID[id]; n++ {
+			id = kind + "." + strings.ReplaceAll(slug(what), "_", "-") + "-" + strconv.Itoa(n)
+		}
+		t.ID = id
+		// one default per group: the first discovered
+		if t.Default {
+			t.Default = !defaults[t.Group]
+			defaults[t.Group] = true
+		}
+		if _, err := t.Encode(); err != nil {
+			result.warn("Some discovered tasks have unsupported or oversized names")
+			return
+		}
+		seenName[name], seenID[id] = true, true
+		result.tasks = append(result.tasks, entry{name: name, task: t})
 	}
 	read := func(name string) ([]byte, bool) {
 		data, err := readTaskSource(project, name, maxTaskSourceBytes)
@@ -100,7 +135,15 @@ func discoverTasks(project string) taskScan {
 				return
 			}
 			targets[m[1]] = true
-			add("make", m[1], "make "+m[1], "make "+taskShellWord(m[1]))
+			t := rhunext.Task{Label: "make " + m[1], Program: program(windows, "make", m[1]),
+				Matchers: []rhunext.Matcher{{Builtin: "gcc"}}}
+			switch m[1] {
+			case "all", "build":
+				t.Group, t.Default = "build", true
+			case "test", "check":
+				t.Group, t.Default = "test", true
+			}
+			add("make", m[1], t)
 		})
 		break
 	}
@@ -118,7 +161,7 @@ func discoverTasks(project string) taskScan {
 			}
 			m := recipeLine.FindStringSubmatch(line)
 			if m != nil && !strings.HasPrefix(m[1], "_") {
-				add("just", m[1], "just "+m[1], "just "+taskShellWord(m[1]))
+				add("just", m[1], rhunext.Task{Label: "just " + m[1], Program: program(windows, "just", m[1])})
 			}
 		})
 		break
@@ -130,13 +173,17 @@ func discoverTasks(project string) taskScan {
 		if err := json.Unmarshal(data, &pkg); err != nil {
 			result.warn("Cannot parse package.json")
 		} else {
-			runner := "npm run"
+			runner := "npm"
 			if taskSourceExists(project, "pnpm-lock.yaml") {
-				runner = "pnpm run"
+				runner = "pnpm"
 			} else if taskSourceExists(project, "yarn.lock") {
-				runner = "yarn run"
+				runner = "yarn"
 			} else if taskSourceExists(project, "bun.lockb") || taskSourceExists(project, "bun.lock") {
-				runner = "bun run"
+				runner = "bun"
+			}
+			exe := runner
+			if windows && runner != "bun" {
+				exe += ".cmd"
 			}
 			names := make([]string, 0, len(pkg.Scripts))
 			for key := range pkg.Scripts {
@@ -144,22 +191,54 @@ func discoverTasks(project string) taskScan {
 			}
 			sort.Strings(names)
 			for _, name := range names {
-				separator := " "
+				args := []string{exe, "run", name}
 				if strings.HasPrefix(name, "-") {
-					separator = " -- "
+					args = []string{exe, "run", "--", name}
 				}
-				add("npm", name, "npm run "+name, runner+separator+taskShellWord(name))
+				t := rhunext.Task{Label: runner + " run " + name, Program: program(windows, args...)}
+				switch name {
+				case "build":
+					t.Group, t.Default = "build", true
+				case "test":
+					t.Group, t.Default = "test", true
+				case "dev", "start", "serve":
+					t.Ready = serverReady
+				}
+				if strings.Contains(pkg.Scripts[name], "tsc") {
+					t.Matchers = []rhunext.Matcher{{Builtin: "tsc"}}
+				}
+				add("npm", name, t)
 			}
 		}
 	}
 	if data, ok := read("Cargo.toml"); ok && data != nil {
+		rustc := []rhunext.Matcher{{Builtin: "rustc"}}
 		for _, name := range []string{"build", "test", "run", "check", "clippy"} {
-			add("cargo", name, "cargo "+name, "cargo "+name)
+			t := rhunext.Task{Label: "cargo " + name, Program: program(windows, "cargo", name)}
+			switch name {
+			case "build":
+				t.Group, t.Default, t.Matchers = "build", true, rustc
+			case "check", "clippy":
+				t.Group, t.Matchers = "build", rustc
+			case "test":
+				t.Group, t.Default, t.Matchers = "test", true, rustc
+			}
+			add("cargo", name, t)
 		}
 	}
 	if data, ok := read("go.mod"); ok && data != nil {
-		for _, name := range []string{"build ./...", "test ./...", "vet ./...", "run ."} {
-			add("go", strings.Fields(name)[0], "go "+name, "go "+name)
+		gom := []rhunext.Matcher{{Builtin: "go"}}
+		for _, args := range [][]string{{"build", "./..."}, {"test", "./..."}, {"vet", "./..."}, {"run", "."}} {
+			t := rhunext.Task{Label: "go " + strings.Join(args, " "), Program: program(windows, append([]string{"go"}, args...)...)}
+			switch args[0] {
+			case "build":
+				t.Group, t.Default, t.Matchers = "build", true, gom
+			case "test":
+				t.Group, t.Default, t.Matchers = "test", true, gom
+			case "vet":
+				t.Matchers = gom
+			}
+			add("go", args[0], t)
 		}
 	}
 	return result

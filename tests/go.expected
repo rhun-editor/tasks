@@ -1,0 +1,29 @@
+ext=tasks state=running
+dialog=Let Tasks run programs in go?
+text=go build ./...   in ~/go
+button=Allow
+*term=1 kind=task owner=rhun-editor/tasks task=go.build state=exited code=1 pid=PID runs=1 title=go build ./...
+problem path=WORK/go/other.go line=3 col=13 end=- severity=error code=- source=go build ./... message=cannot use "s" (untyped string constant) as int value in variable declaration
+problem path=WORK/go/main.go line=4 col=2 end=- severity=error code=- source=go build ./... message=declared and not used: x
+problem path=WORK/go/main.go line=4 col=7 end=- severity=error code=- source=go build ./... message=undefined: undefinedThing
+4 2 4 3 error problems:go build ./... declared and not used: x
+4 7 4 21 error problems:go build ./... undefined: undefinedThing
+errors=2 warnings=0
+row 0 y=344 d=0 open id=WORK/go/other.go label=other.go badge=1
+row 1 y=372 d=1 leaf id=#1 label=cannot use "s" (untyped string constant) as int value in variable declaration desc=go build ./...  3:13 icon=4
+row 2 y=400 d=0 open id=WORK/go/main.go label=main.go badge=2
+row 3 y=428 d=1 leaf id=#2 label=declared and not used: x desc=go build ./...  4:2 icon=4
+row 4 y=456 d=1 leaf id=#3 label=undefined: undefinedThing desc=go build ./...  4:7 icon=4
+# example.com/w1
+./other.go:3:13: cannot use "s" (untyped string constant) as int value in variable declaration
+./main.go:4:2: declared and not used: x
+./main.go:4:7: undefined: undefinedThing
+── go build ./... exited with code 1 after T s, 3 errors ──
+
+
+
+
+
+
+
+cursor 5,0
