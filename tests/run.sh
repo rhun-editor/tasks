@@ -63,13 +63,15 @@ INI
     esac
 }
 
+# confined=2 is confined too: Landlock TCP rules where user namespaces are off (Ubuntu 24.04 runners)
 fails=0
 for name in $names; do
     setup "$name"
     sed "s|PROJ/|$work/$name/|g" "tests/$name.txt" > "$work/$name.txt"
     GOWORK=off HOME=$work XDG_CONFIG_HOME=$work/config XDG_STATE_HOME=$work/state TERM=xterm-256color \
         "$RHUN" "$work/$name" --headless 1000x600 --scale 1 --extensions "$work/exts" --script "$work/$name.txt" 2>&1 \
-        | sed -e 's/pid=[1-9][0-9]*/pid=PID/' -e "s|$work|WORK|g" -e 's/after [0-9.]* s/after T s/' \
+        | sed -e 's/pid=[1-9][0-9]*/pid=PID/' -e 's/ confined=2$/ confined=1/' -e "s|$work|WORK|g" \
+              -e 's/after [0-9.]* s/after T s/' \
               -e "s/$port/PORT/g" > "$work/$name.out"
     [ -z "$TASKS_TEST_OUT" ] || cp "$work/$name.out" "$TASKS_TEST_OUT/"     # to make a new .expected
     if cmp -s "$work/$name.out" "tests/$name.expected"; then

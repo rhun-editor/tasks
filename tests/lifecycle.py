@@ -10,6 +10,11 @@ import threading
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+# make tasks are argv on Windows (no POSIX shell there), a shell line elsewhere
+WINDOWS = os.name == 'nt'
+OLD_TASK = (b'make.old argv 8 9 0 14\nmake oldmake\x00old\x00matcher gcc 0\n' if WINDOWS
+            else b'make.old shell 8 8 0 14\nmake oldmake oldmatcher gcc 0\n')
+NEW_FORM = b'make.new argv' if WINDOWS else b'make.new shell'
 
 
 class Lifecycle(unittest.TestCase):
@@ -61,7 +66,7 @@ class Lifecycle(unittest.TestCase):
                 if tasks:
                     fields, body = take()
                     self.assertEqual(fields[1], 'tasks-set')
-                    self.assertTrue(body.startswith(b'2\nmake.old shell 8 8 0 14\nmake oldmake oldmatcher gcc 0\n'), body)
+                    self.assertTrue(body.startswith(b'2\n' + OLD_TASK), body)
                     send('ok ' + fields[0])
                 initial = []
                 for _ in range(2):
@@ -77,7 +82,7 @@ class Lifecycle(unittest.TestCase):
                 while True:
                     fields, body = take()
                     if fields[1] == 'tasks-set':
-                        self.assertIn(b'make.new shell', body)
+                        self.assertIn(NEW_FORM, body)
                         self.assertNotIn(b'make.old', body)
                         seen.append(('tasks-set',))
                         send('ok ' + fields[0])
